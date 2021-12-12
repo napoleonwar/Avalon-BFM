@@ -1,4 +1,4 @@
-#Bus FUnction Model: Avalon Interface Verificaton
+#Bus Function Model: Avalon Interface Verificaton
 In this folder, it includes the RTL design of Avalon Interface by Chisel HDL, and a test folder for all defined transactions
 
 ##Technical Reference

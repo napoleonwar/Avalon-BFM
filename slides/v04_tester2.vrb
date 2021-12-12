@@ -1,0 +1,18 @@
+\frametitle{Home Work}
+\begin{itemize}
+\item Read up on a topic
+\item Anything related to testing and verification
+\item Give a 15' presentation on it next week
+\item Following list is just possible examples
+\begin{itemize}
+\item Test coverage (Hans)
+\item Testing in SW
+\item Agile development and TDD (Victor)
+\item Test categories (in SW, in HW)
+\item Testing in open-source projects
+\item Available test infrastructure (e.g., AXI transactions)
+\item Testing a processor, e.g., what is Rocket doing?
+\item Testing of Chisel itself
+\item Your idea/interest
+\end{itemize}
+\end{itemize}

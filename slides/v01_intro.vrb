@@ -1,0 +1,6 @@
+\frametitle{Lab Time: Hello World Testing}
+\begin{itemize}
+\item Write test/verification code for a 5:1 multiplexer
+\item Project and DUT in GitHub lab1
+\item \url{https://github.com/chisel-uvm/class2020}
+\end{itemize}

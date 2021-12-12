@@ -1,0 +1,27 @@
+[
+  {
+    "class":"firrtl.transforms.CombinationalPath",
+    "sink":"~Mux5|Mux5>io_y",
+    "sources":[
+      "~Mux5|Mux5>io_a",
+      "~Mux5|Mux5>io_sel",
+      "~Mux5|Mux5>io_c",
+      "~Mux5|Mux5>io_d",
+      "~Mux5|Mux5>io_e"
+    ]
+  },
+  {
+    "class":"logger.LogLevelAnnotation",
+    "globalLogLevel":{
+      
+    }
+  },
+  {
+    "class":"firrtl.EmitCircuitAnnotation",
+    "emitter":"firrtl.VerilogEmitter"
+  },
+  {
+    "class":"firrtl.transforms.BlackBoxTargetDirAnno",
+    "targetDir":"generated"
+  }
+]

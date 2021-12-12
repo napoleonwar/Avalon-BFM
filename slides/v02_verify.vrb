@@ -1,0 +1,8 @@
+\frametitle{Lab Time III: CI with Travis}
+\begin{itemize}
+\item Create a repo on GitHub
+\item Add the ALU plus your tester
+\item Connect it with Travis
+\item you need a \code{.travis.yml}
+\item Look into the Chisel book source for an example
+\end{itemize}
