@@ -1,19 +1,25 @@
 package avalon_mm
 
-import Chisel.{Enum, switch}
+import Chisel.{Enum, Queue, switch}
+import avalon_mm.avalon_mm_config.{AV_ADDRESS_W, AV_BURSTCOUNT_W, AV_DATA_W, AV_NUMSYMBOLS, AV_READRESPONSE_W, AV_TRANSACTIONID_W, MAX_BURST_SIZE}
 import chisel3._
+import chisel3.experimental.ChiselEnum
 import chiseltest._
 import chisel3.iotesters._
+
+import scala.collection.mutable.Queue
 import chisel3.util
-import com.sun.org.apache.bcel.internal.generic.SWITCH
+import com.sun.org.apache.bcel.internal.generic.{NEW, SWITCH}
+
 import javax.swing.OverlayLayout
+import scala.collection.mutable
 
 // Avalon MM BFM interface input/output
 // Defined in Avalon Specification Chp3
-class avalon_mm_bfm_master_if(val data_w: Int, val addr_w: Int, burst_w: Int  ) extends Bundle {
+class avalon_mm_bfm_master_if(val data_w: Int, val addr_w: Int, burst_w: Int) extends Bundle {
     // Clock and Reset????
-    //    val clk = Input(UInt(1.W))
-    //    val rst = Input(UInt(1.W))
+    val clk = Input(Clock())
+    val rst = Input(Reset())
     //Write OUTPUT Host -> agent
     //Read INPUT Agent -> Host
     val avm_address = Output(UInt(data_w.W))
@@ -31,18 +37,16 @@ class avalon_mm_bfm_master_if(val data_w: Int, val addr_w: Int, burst_w: Int  ) 
     val avm_writeresponsevalid: Bool = Input(Bool())
     //Write Host -> Agent Burst
     val avm_burstcount: Nothing = Output(UInt(burst_w.W))
+
+    // There are some pins not shown in the specification but in IP guide
+    // Need to be added later
+    // avm_transactionid avm_readid avm_writeid
 }
-//Response status, specification response signal P15
-class avm_mm_response_status{
-    val OKAY = "b00".U
-    val RESERVED = "b01".U
-    val SLVERR = "b10".U
-    val DECODEERROR = "b11".U
-}
+
 //Parameters, including setup time, wait time....timing defines
 //In the Verification IP User Guide
 //they are constants for the rest, so defined as an object
-object avalon_mm_config{
+object avalon_mm_config extends Bundle {
     // Port Width
     val AV_ADDRESS_W               = 32 // Address width in bits
     val AV_SYMBOL_W                = 8  // Data symbol width in bits
@@ -85,7 +89,7 @@ object avalon_mm_config{
     val AV_REGISTERED_WAITREQUEST  = 0  // Waitrequest is registered at the slave. To Reg
     val AV_REGISTERINCOMINGSIGNALS = 0  // Indicate that waitrequest is come from register
 
-    // No idea what are these
+    // To do: No idea what are these
     val AV_MAX_PENDING_WRITES      = 0  // Number of pending write transactions
     val AV_CONSTANT_BURST_BEHAVIOR = 1  // Address, burstcount, transactionid and
     // avm_writeresponserequest need to be held constant
@@ -93,8 +97,63 @@ object avalon_mm_config{
     val MAX_BURST_SIZE            = if(USE_BURSTCOUNT != 0) 2^(AV_BURSTCOUNT_W-1) else 1
     val AV_DATA_W                 = AV_SYMBOL_W * AV_NUMSYMBOLS
     val AV_TRANSACTIONID_W        = 8
+
+
+}
+// ********************* Descriptor *****************
+// Include 2 Descriptors and 3 queues
+// Write Transaction: To slave, with Burst enable
+// Command  Descriptor Structure, receive Transaction level commmand from BEM API
+class MasterCommand_t {
+    val request = new response_t
+    val address = UInt((AV_ADDRESS_W).W)      // start address
+    val burstcount = UInt((AV_BURSTCOUNT_W).W) // the burst data length
+    val writedata = Vec(MAX_BURST_SIZE, AV_DATA_W)  // data point to agent
+    val byte_enbale = Vec(MAX_BURST_SIZE, AV_NUMSYMBOLS) // byte choose
+    val idle = Vec(MAX_BURST_SIZE, 32) // ?????what is this?????
+    val init_latency = 0
+    val seq_count = 0
+    val burst_size = MAX_BURST_SIZE
+    val arbiterlock = false
+    val lock = 0
+    val debugacess = 0
+    val transaction_id = UInt((AV_TRANSACTIONID_W).W)
+    val write_response_request = false
+}
+// Response descriptor: Should give proper response to both Write and Read
+class MasterResponse_t {
+    val request = new response_t
+    val address = UInt((AV_ADDRESS_W).W)      // start address
+    val burstcount = UInt((AV_BURSTCOUNT_W).W) // the burst data length
+    val data = Vec(MAX_BURST_SIZE, AV_DATA_W)  // data point to agent
+    val byte_enbale = Vec(MAX_BURST_SIZE, AV_NUMSYMBOLS-1) // byte choose
+    val wait_latency = Vec(MAX_BURST_SIZE, 32) // a vector has INT members
+    val read_latency = Vec(MAX_BURST_SIZE, 32)
+    val write_latency = 0
+    val seq_count = 0
+    val burst_size = MAX_BURST_SIZE
+    val read_id = UInt((AV_TRANSACTIONID_W).W)
+    val write_id = UInt((AV_TRANSACTIONID_W).W)
+    val read_response = Vec(MAX_BURST_SIZE, AV_READRESPONSE_W)
+    val write_response = new response_status
+    val write_response_request = false
+}
+// Issued command queue
+class IssuedCommand_t {
+    val command = new MasterCommand_t
+    val time_stamp = Vec(MAX_BURST_SIZE, 32)
+    val wait_time = Vec(MAX_BURST_SIZE, 32)
+}
+// Response status enum
+class response_t extends ChiselEnum {
+    val REQ_IDLE, REQ_READ, REQ_WRITE = Value
+}
+//Response status, specification response signal P15
+class response_status extends ChiselEnum{
+    val OKAY, RESERVED, SLVERR, DECODEERROR = Value
 }
 
+//****************************************
 
 class avalon_mm_bfm_master_main[T <: MultiIOModule](dut :T, val avm_if: avalon_mm_bfm_master_if) extends PeekPokeTester(dut) {
     // Connect DTU with Avalon Bus Function Model
@@ -111,13 +170,76 @@ class avalon_mm_bfm_master_main[T <: MultiIOModule](dut :T, val avm_if: avalon_m
     val response = avm_if.avm_response
     val waitrequest = avm_if.avm_waitrequest
     val burst_cnt = 0.U
+    // Set up some globle variables
+    var command_issued_counter      = 0 
+    var command_completed_counter   = 0 
+    var command_outstanding_counter = 0 
+    var command_sequence_counter    = 1 
 
+    var response_timeout    = 100  // disabled when 0
+    var command_timeout     = 100  // disabled when 0
+    var max_command_queue_size  = 256 
+    var min_command_queue_size  = 2 
+    var temp_write_latency  = 0 
+    var response_time_stamp = 0 
+    var temp_read_latency   = 0 
+    var read_response_burst_counter = 0 
+    var response_time_stamp_queue = mutable.Queue[Int]() 
+    var start_construct_complete_write_response = 0 
+    var start_construct_complete_read_response = 0 
+    // Command Descriptor -> Command Queue -> Driver
+    //                                           |
+    //                                        Fabric BUs
+    //                                           |
+    // Response Descriptor <- Response Queue <- Receiver
+    // Build up necessary types for Command/Response queue
+    // Instantiate Queues and Descriptors
+    val pending_command_queue = mutable.Queue[MasterCommand_t]()
+    val pending_read_response_queue = mutable.Queue[MasterCommand_t]()
+    val pending_write_response_queue = mutable.Queue[MasterCommand_t]()
+
+    val issued_write_command_queue = mutable.Queue[IssuedCommand_t]()
+    val issued_read_command_queue = mutable.Queue[IssuedCommand_t]()
+    // Before signals go to the Bus,
     // DUT SIGNALS
     // Initialization
     // BFM -> DUT signals
     poke(addr,0x0000)
 
     // DUT -> BFM signals
+    // DUT <-> BFM functions
+    // From here, 50+ BFM functions illustrated in Verification IP Guide
+    // will be implemented, still have some questions about DUT-IF connection
+
+    def get_version() = "Avalon Interface in Chisel"
+
+    def set_response_timeout(cycles : Int): Unit = { //Unit = void
+        if(cycles != 0){
+            response_timeout = cycles
+            printf(p"Response timeout is $response_timeout.\n")
+            printf(p"Input Cycles are $cycles")
+        }
+        else printf(p"Cycles are $cycles, disable timeout.\n")
+    }
+    // Waiting for waitrequest and before timeout happens
+    def set_command_timeout(cycles : Int): Unit = { //Unit = void
+        if(cycles != 0){
+            command_timeout = cycles
+            printf(p"Response timeout is $command_timeout.\n")
+            printf(p"Input Cycles are $cycles")
+        }
+        else printf(p"Cycles are $cycles, disable timeout.\n")
+    }
+    // All queued transtractions are finished
+    def all_transactions_complete(): Unit = {}
+    //Queries the command queue to determine number of pending commands waiting to be
+    //driven out as Avalon requests.
+    def get_command_pending_queue_size(): Int = {}
+    //Queries the issued command queue to determine the number of commands that have been
+    //driven to the system interconnect fabric, but not completed.
+    def get_command_issued_queue_size(): Int = { val length = issued_read_command_queue.length}
+
+
     def avalon_mm_if_signal_init(addr_w: Int, data_w: Int, burst_w: Int, lock_value: Boolean) : avalon_mm_bfm_master_if = {
         val result : avalon_mm_bfm_master_if = new avalon_mm_bfm_master_if(addr_w, data_w, burst_w)
         //BFM TO DUT (Output)
