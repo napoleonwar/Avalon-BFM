@@ -1,6 +1,6 @@
 package avalon_mm
 
-import avalon_mm.avalon_mm_config.{AV_ADDRESS_W, AV_BURSTCOUNT_W, AV_DATA_W, AV_NUMSYMBOLS, AV_TRANSACTIONID_W, MAX_BURST_SIZE, USE_BURSTCOUNT, USE_READ_DATA_VALID, USE_WRITERESPONSE}
+import avalon_mm.avalon_mm_config.{AV_ADDRESS_W, AV_BURSTCOUNT_W, AV_DATA_W, AV_FIX_READ_LATENCY, AV_NUMSYMBOLS, AV_TRANSACTIONID_W, MAX_BURST_SIZE, USE_BURSTCOUNT, USE_READRESPONSE, USE_READ_DATA_VALID, USE_WRITERESPONSE}
 import avalon_mm.request_t.{REQ_IDLE, REQ_READ, REQ_WRITE}
 import chisel3._
 import chisel3.experimental.ChiselEnum
@@ -118,13 +118,13 @@ class MasterResponse_t {
     var data = Array(MAX_BURST_SIZE, AV_DATA_W) // data point to agent
     var byte_enable = Array(MAX_BURST_SIZE, AV_NUMSYMBOLS - 1) // byte choose
     var wait_latency = Array(MAX_BURST_SIZE, 32) // a vector has INT members
-    val read_latency        = Array(MAX_BURST_SIZE, 32)
-    val write_latency       = Array(MAX_BURST_SIZE, 32)
+    var read_latency = Array(MAX_BURST_SIZE, 32)
+    var write_latency       = 0
     var seq_count = 0
     var burst_size = MAX_BURST_SIZE
     val read_id             = UInt((AV_TRANSACTIONID_W).W)
     val write_id            = UInt((AV_TRANSACTIONID_W).W)
-    val read_response       = Array(MAX_BURST_SIZE, 2)
+    var read_response = Array(MAX_BURST_SIZE, 2)
     var write_response       = response_status
     var write_response_valid = false
 }
@@ -206,8 +206,8 @@ class avalon_mm_bfm_master_main[T <: MultiIOModule](dut :T, val avm_if: avalon_m
     val issued_read_command_queue       = mutable.Queue[IssuedCommand_t]()
 
     var completed_command               = new IssuedCommand_t
-    val completed_read_command          = new IssuedCommand_t
-    val completed_write_command         = new IssuedCommand_t
+    var completed_read_command = new IssuedCommand_t
+    var completed_write_command = new IssuedCommand_t
     val completed_read_response         = new MasterResponse_t
     val completed_write_response        = new MasterResponse_t
     // Before signals go to the Bus,
@@ -249,7 +249,7 @@ class avalon_mm_bfm_master_main[T <: MultiIOModule](dut :T, val avm_if: avalon_m
         if( master_response.request == REQ_READ)
             master_response.read_latency(index)
         else if(master_response.request == REQ_WRITE)
-            master_response.write_latency(index)
+            master_response.write_latency
     }
 
     def get_response_queue_size(): Int = pending_read_response_queue.length
@@ -500,36 +500,137 @@ class avalon_mm_bfm_master_main[T <: MultiIOModule](dut :T, val avm_if: avalon_m
                     completed_command.wait_time
 
                 completed_write_response.write_response_valid = false
-                completed_write_response.write_response  = response_status.OKAY
+                //completed_write_response.write_response.Type  = response_status.OKAY
 
                 pending_write_response_queue += completed_write_response
             }
 
         }
-
-
-        def rising_edge(x: Bool) = x && !RegNext(x)
-        //some time stamp for current operation
-        //wait request
-        if(waitrequest) {
-            for(cycle <- 1 to max_wait_cycles ) {
-                while(avalon_if.waitrequest === true.B && !rising_edge(clk)) {/*wait*/}
-                if(cycle === max_wait_cycles) {
-                    timeout := true.B
-                    printf(p"ERROR: Waitrequest failed > Time out./n")
-                }
-                else {break()}
-            }
-        }
-        else {
-            for(cycle <- 1 to max_wait_write){
-                while(!rising_edge(clk)) {/*waiting*/}
-                //check value in range
-            }
-        }
+//        def rising_edge(x: Bool) = x && !RegNext(x)
+//        //some time stamp for current operation
+//        //wait request
+//        if(waitrequest) {
+//            for(cycle <- 1 to max_wait_cycles ) {
+//                while(avalon_if.waitrequest === true.B && !rising_edge(clk)) {/*wait*/}
+//                if(cycle === max_wait_cycles) {
+//                    timeout := true.B
+//                    printf(p"ERROR: Waitrequest failed > Time out./n")
+//                }
+//                else {break()}
+//            }
+//        }
+//        else {
+//            for(cycle <- 1 to max_wait_write){
+//                while(!rising_edge(clk)) {/*waiting*/}
+//                //check value in range
+//            }
+//        }
         //wait for a hold time
 
     }
 
-    
+    def avalon_mm_read(): Unit ={
+        when(avm_if.rst.toBool()) {init()}
+
+        if (issued_write_command_queue.nonEmpty)
+            if (start_construct_complete_write_response == 0) {
+                completed_write_command = issued_write_command_queue.dequeue()
+                start_construct_complete_write_response = 1
+            }
+        if (issued_read_command_queue.nonEmpty)
+            if (read_response_burst_counter == 0 && start_construct_complete_read_response == 0) {
+                completed_read_command = issued_read_command_queue.dequeue()
+                start_construct_complete_read_response = 1
+            }
+        if (start_construct_complete_read_response > 0) monitor_response(completed_read_command)
+        if (start_construct_complete_write_response > 0) monitor_response(completed_write_command)
+
+    }
+    def monitor_response(completed_command: IssuedCommand_t): Unit ={
+        completed_command.command.request match {
+            case REQ_WRITE =>
+                // Check if use signal and request signal valid, and if there is input from IO
+                if(!avm_if.avm_writeresponsevalid.litToBoolean) {temp_write_latency += 1; return}
+                if(USE_WRITERESPONSE == 1 && completed_command.command.write_response_valid){
+                    completed_write_response.read_latency    = Array.fill[Int](MAX_BURST_SIZE)(0)
+                    completed_write_response.read_response   = Array.fill[Int](MAX_BURST_SIZE)(0)
+                    completed_write_response.seq_count =
+                        completed_command.command.seq_count
+                    completed_write_response.request =
+                        completed_command.command.request
+                    completed_write_response.address =
+                        completed_command.command.address
+                    completed_write_response.byte_enable =
+                        completed_command.command.byte_enable
+                    completed_write_response.burstcount =
+                        completed_command.command.burstcount
+                    completed_write_response.burst_size =
+                        completed_command.command.burst_size
+                    completed_write_response.wait_latency =
+                        completed_command.wait_time
+                    completed_write_response.data =
+                        completed_command.command.writedata
+
+                    completed_write_response.write_response_valid = true
+                    completed_write_response.write_latency  = temp_write_latency
+
+                    temp_write_latency = 0
+                    pending_write_response_queue += completed_write_response
+                    start_construct_complete_write_response = 0
+                }
+            case REQ_READ =>
+                if (read_response_burst_counter == 0) 
+                    completed_read_response.read_latency    = Array.fill[Int](MAX_BURST_SIZE)(0)
+                    completed_read_response.write_latency   = 0
+                    completed_read_response.wait_latency    = Array.fill[Int](MAX_BURST_SIZE)(0)
+                    completed_read_response.data            = Array.fill[Int](MAX_BURST_SIZE)(0)
+                    completed_read_response.read_response   = Array.fill[Int](MAX_BURST_SIZE)(0)
+                
+                completed_read_response.seq_count =
+                    completed_command.command.seq_count
+                completed_read_response.request =
+                    completed_command.command.request
+                completed_read_response.address =
+                    completed_command.command.address
+                completed_read_response.byte_enable =
+                    completed_command.command.byte_enable
+                completed_read_response.burstcount =
+                    completed_command.command.burstcount
+                completed_read_response.burst_size =
+                    completed_command.command.burst_size
+                completed_read_response.wait_latency(0) =
+                    completed_command.wait_time(0)
+
+                if(USE_READ_DATA_VALID == 1||USE_BURSTCOUNT == 1){
+                    if(!avm_if.avm_writeresponsevalid.litToBoolean) {temp_read_latency += 1; return}
+                        completed_read_response.data(read_response_burst_counter) = avm_if.avm_readdata.intValue()
+                    if (read_response_burst_counter == 0)
+                        completed_read_response.read_latency(0) = clock_counter - completed_command.time_stamp
+                    else
+                        completed_read_response.read_latency(read_response_burst_counter) = temp_read_latency
+
+                    temp_read_latency = 0
+                }
+                else { //Burst
+                    if(AV_FIX_READ_LATENCY > 0 && (clock_counter - completed_command.time_stamp < AV_FIX_READ_LATENCY))
+                        return
+                    completed_read_response.read_latency(0) = AV_FIX_READ_LATENCY
+                    completed_read_response.data(0) = avm_if.avm_readdata.intValue()
+                    temp_read_latency = 0
+                }
+
+                if(read_response_burst_counter.U == completed_read_response.burstcount) {
+                    pending_read_response_queue += completed_read_response
+                    read_response_burst_counter = 0
+                    start_construct_complete_write_response = 0
+                }
+                else read_response_burst_counter += 1
+
+            case _ => printf(p"Error: command is not in the list \n")
+        }
+    }
+
+
+
+
 }
