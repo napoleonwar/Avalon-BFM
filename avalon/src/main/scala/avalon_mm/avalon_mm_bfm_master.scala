@@ -11,7 +11,8 @@ import chiseltest._
 import scala.collection.immutable.Nil
 import scala.collection.mutable
 
-class avalon_mm_bfm_master_if(val data_w: Int, val addr_w: Int, burst_w: Int) extends Bundle {
+class avalon_mm_bfm_master_if(val data_w: Int, val addr_w: Int, burst_w: Int) extends Module {
+    val io = IO(new Bundle{
     // Clock and Reset????
     val clk              = Input(Clock())
     val rst              = Input(Reset())
@@ -32,7 +33,7 @@ class avalon_mm_bfm_master_if(val data_w: Int, val addr_w: Int, burst_w: Int) ex
     val avm_writeresponsevalid  = Input(Bool())
     //Write Host -> Agent Burst
     val avm_burstcount  = Output(UInt(burst_w.W))
-
+    })
     // There are some pins not shown in the specification but in IP guide
     // Need to be added later
     // avm_transactionid avm_readid avm_writeid
@@ -98,9 +99,9 @@ class MasterCommand_t {
     var request             = REQ_IDLE
     var address             = UInt((AV_ADDRESS_W).W) // start address
     var burstcount          = UInt((AV_BURSTCOUNT_W).W) // the burst data length
-    var writedata           = Array(MAX_BURST_SIZE, AV_DATA_W)  // data point to agent
-    var byte_enable         = Array(MAX_BURST_SIZE, AV_NUMSYMBOLS) // byte choose
-    var idle: Array[Int]    = Array(MAX_BURST_SIZE, 32) // ?????what is this?????
+    var writedata           = Array.ofDim[Int](MAX_BURST_SIZE)  // data point to agent
+    var byte_enable         = Array.ofDim[Int](MAX_BURST_SIZE) // byte choose
+    var idle                = Array.ofDim[Int](MAX_BURST_SIZE) // ?????what is this?????
     var init_latency        = 0
     var seq_count           = 0
     var burst_size          = MAX_BURST_SIZE
@@ -115,31 +116,33 @@ class MasterResponse_t {
     var request = REQ_IDLE
     var address = UInt((AV_ADDRESS_W).W) // start address
     var burstcount = UInt((AV_BURSTCOUNT_W).W) // the burst data length
-    var data = Array(MAX_BURST_SIZE, AV_DATA_W) // data point to agent
-    var byte_enable = Array(MAX_BURST_SIZE, AV_NUMSYMBOLS - 1) // byte choose
-    var wait_latency = Array(MAX_BURST_SIZE, 32) // a vector has INT members
-    var read_latency = Array(MAX_BURST_SIZE, 32)
+    var data = Array.ofDim[Int](MAX_BURST_SIZE) // data point to agent
+    var byte_enable = Array.ofDim[Int](MAX_BURST_SIZE) // byte choose
+    var wait_latency = Array.ofDim[Int](MAX_BURST_SIZE) // a vector has INT members
+    var read_latency = Array.ofDim[Int](MAX_BURST_SIZE)
     var write_latency       = 0
     var seq_count = 0
     var burst_size = MAX_BURST_SIZE
     val read_id             = UInt((AV_TRANSACTIONID_W).W)
     val write_id            = UInt((AV_TRANSACTIONID_W).W)
-    var read_response = Array(MAX_BURST_SIZE, 2)
+    var read_response = Array.ofDim[Int](MAX_BURST_SIZE)
     var write_response       = response_status
     var write_response_valid = false
 }
 // Issued command queue
 class IssuedCommand_t {
     var command = new MasterCommand_t
-    val time_stamp  = Array(MAX_BURST_SIZE, 32)
-    val wait_time   = Array(MAX_BURST_SIZE, 32)
+    val time_stamp  = Array.ofDim[Int](MAX_BURST_SIZE)
+    val wait_time   = Array.ofDim[Int](MAX_BURST_SIZE)
 }
 // Response status enum
-object  request_t extends ChiselEnum {
+object  request_t extends Enumeration {
+    type request_t = Value
     val REQ_IDLE, REQ_READ, REQ_WRITE = Value
 }
 //Response status, specification response signal P15
-object response_status extends ChiselEnum{
+object response_status extends Enumeration {
+    type response_status = Value
     val OKAY, RESERVED, SLVERR, DECODEERROR = Value
 }
 // Did not use
@@ -156,18 +159,18 @@ object response_status extends ChiselEnum{
 
 //****************************************
 
-class avalon_mm_bfm_master_main[T <: MultiIOModule](dut :T, val avm_if: avalon_mm_bfm_master_if) extends PeekPokeTester(dut) {
+class avalon_mm_bfm_master_main( val avm_if: avalon_mm_bfm_master_if) extends PeekPokeTester(avm_if) {
     // Connect DUT with Avalon Bus Function Model
-    val addr        = avm_if.avm_address
-    val byteenable  = avm_if.avm_byteenable
-    val debugaccess = avm_if.avm_debugaccess
-    val read        = avm_if.avm_read
-    val write       = avm_if.avm_write
-    val writedata   = avm_if.avm_writedata
+    val addr        = avm_if.io.avm_address
+    val byteenable  = avm_if.io.avm_byteenable
+    val debugaccess = avm_if.io.avm_debugaccess
+    val read        = avm_if.io.avm_read
+    val write       = avm_if.io.avm_write
+    val writedata   = avm_if.io.avm_writedata
 
-    val readdata    = avm_if.avm_readdata
-    val response    = avm_if.avm_response
-    val waitrequest = avm_if.avm_waitrequest
+    val readdata    = avm_if.io.avm_readdata
+    val response    = avm_if.io.avm_response
+    val waitrequest = avm_if.io.avm_waitrequest
     val burst_cnt = 0
     //*********************** Set up Registers about timing ******//
     val clock_counter = RegInit(0.U)
@@ -256,11 +259,11 @@ class avalon_mm_bfm_master_main[T <: MultiIOModule](dut :T, val avm_if: avalon_m
 
     def get_response_read_response(index: Int): Int = master_response.read_response(index)
 
-    def get_response_request():  request_t.Type = master_response.request
+    def get_response_request():  request_t.Value = master_response.request
     // 5.4.20
     def get_response_wait_time(index: Int) : Int = master_response.wait_latency(index)
 
-    def get_write_response_status(): response_status.Type = {
+    def get_write_response_status(): response_status.type = {
         if(master_response.request == REQ_WRITE){
             if(USE_WRITERESPONSE == 1 && master_response.write_response_valid)
                 master_response.write_response
@@ -274,14 +277,14 @@ class avalon_mm_bfm_master_main[T <: MultiIOModule](dut :T, val avm_if: avalon_m
     // Initializes the Avalon-MM master interface. 1. init descriptors 2. init queues 3. setup interface signals
     def init() : Unit = {
         printf(p"Start Initialization\n")
-        avm_if.avm_address := 0.U
-        avm_if.avm_byteenable := 0.U
-        avm_if.avm_debugaccess := false.B
-        avm_if.avm_read := false.B
-        avm_if.avm_write := false.B
-        avm_if.avm_writedata := 0.U
-        avm_if.avm_lock := false.B
-        avm_if.avm_burstcount := 0.U
+        avm_if.io.avm_address := 0.U
+        avm_if.io.avm_byteenable := 0.U
+        avm_if.io.avm_debugaccess := false.B
+        avm_if.io.avm_read := false.B
+        avm_if.io.avm_write := false.B
+        avm_if.io.avm_writedata := 0.U
+        avm_if.io.avm_lock := false.B
+        avm_if.io.avm_burstcount := 0.U
 
     }
     // Removes the oldest response descriptor from the response queue
@@ -333,9 +336,9 @@ class avalon_mm_bfm_master_main[T <: MultiIOModule](dut :T, val avm_if: avalon_m
             printf(p"Burst count Pin unavailable")
             command_temp.burstcount = 1.U
         }
-        if(burst_count > MAX_BURST_SIZE)
+        if((burst_count > MAX_BURST_SIZE.U).litToBoolean)
             printf(p"Out of range, burst count should smaller than $MAX_BURST_SIZE\n")
-        else if( burst_count < 1) printf(p"Out of range, burst count should larger than 0")
+        else if( (burst_count < 1.U).litToBoolean) printf(p"Out of range, burst count should larger than 0")
 
     }
 
@@ -362,7 +365,7 @@ class avalon_mm_bfm_master_main[T <: MultiIOModule](dut :T, val avm_if: avalon_m
         }
     }
 
-    def set_command_request(request: request_t.Type): Unit = command_temp.request = request
+    def set_command_request(request: request_t.Value): Unit = command_temp.request = request
     // Sets the number of elapsed cycles between waiting for a waitrequest and when time out
     // is asserte
     def set_command_timeout(cycles: Int): Unit ={
@@ -396,17 +399,17 @@ class avalon_mm_bfm_master_main[T <: MultiIOModule](dut :T, val avm_if: avalon_m
     def avalon_mm_if_signal_init(addr_w: Int, data_w: Int, burst_w: Int, lock_value: Boolean) : avalon_mm_bfm_master_if = {
         val result : avalon_mm_bfm_master_if = new avalon_mm_bfm_master_if(addr_w, data_w, burst_w)
         //BFM TO DUT (Output)
-        result.avm_address      := 0.U(addr_w.W)
-        result.avm_byteenable   := false.B
-        result.avm_read         := false.B
-        result.avm_write        := false.B
-        result.avm_writedata    := 0.U(data_w.W)
-        result.avm_lock         := false.B
+        result.io.avm_address      := 0.U(addr_w.W)
+        result.io.avm_byteenable   := false.B
+        result.io.avm_read         := false.B
+        result.io.avm_write        := false.B
+        result.io.avm_writedata    := 0.U(data_w.W)
+        result.io.avm_lock         := false.B
         //DUT to BFM (Input)
-        result.avm_readdata := 0.U(data_w.W)
-        result.avm_response := 0.U(2.W)
-        result.avm_waitrequest := false.B
-        result.avm_readdatavalid := false.B
+        result.io.avm_readdata := 0.U(data_w.W)
+        result.io.avm_response := 0.U(2.W)
+        result.io.avm_waitrequest := false.B
+        result.io.avm_readdatavalid := false.B
 
         result // Return
     }
@@ -417,7 +420,7 @@ class avalon_mm_bfm_master_main[T <: MultiIOModule](dut :T, val avm_if: avalon_m
         //Before this point, some check points are set up
         //return the normalized data into IF
         //clock is not explicitly shown in chisel, so ignore the clock signal
-        when(avm_if.rst.toBool()){
+        when(avm_if.io.rst.toBool()){
             init()
         }
         // Counting time, timeout
@@ -438,39 +441,39 @@ class avalon_mm_bfm_master_main[T <: MultiIOModule](dut :T, val avm_if: avalon_m
             command_cur = pending_command_queue.dequeue()
             clock_counter := 0.U
             while(clock_counter != command_cur.init_latency.U){
-               avm_if.clk.step()
+               avm_if.io.clk.step()
             }
-            avm_if.avm_address     := command_cur.address
-            avm_if.avm_burstcount  := command_cur.burstcount
-            avm_if.avm_lock        := command_cur.lock.B
-            avm_if.avm_debugaccess := command_cur.debugacess.B
+            avm_if.io.avm_address     := command_cur.address
+            avm_if.io.avm_burstcount  := command_cur.burstcount
+            avm_if.io.avm_lock        := command_cur.lock.B
+            avm_if.io.avm_debugaccess := command_cur.debugacess.B
             command_cur.request match{
-                case REQ_READ =>  avm_if.avm_write := 0.U
-                                  avm_if.avm_read  := 1.U
-                                  avm_if.avm_writeresponsevalid := 0.U
-                case REQ_WRITE => avm_if.avm_write := 1.U
-                                  avm_if.avm_read  := 0.U
-                                  avm_if.avm_writeresponsevalid := command_cur.write_response_valid.B
-                case REQ_IDLE =>  avm_if.avm_write := 0.U
-                                  avm_if.avm_read  := 0.U
-                                  avm_if.avm_writeresponsevalid := 0.U
+                case REQ_READ =>  avm_if.io.avm_write := 0.U
+                                  avm_if.io.avm_read  := 1.U
+                                  avm_if.io.avm_writeresponsevalid := 0.U
+                case REQ_WRITE => avm_if.io.avm_write := 1.U
+                                  avm_if.io.avm_read  := 0.U
+                                  avm_if.io.avm_writeresponsevalid := command_cur.write_response_valid.B
+                case REQ_IDLE =>  avm_if.io.avm_write := 0.U
+                                  avm_if.io.avm_read  := 0.U
+                                  avm_if.io.avm_writeresponsevalid := 0.U
                 case _ => printf(p"Warning: not a valid request \n")
             }
             command_issued_counter += 1
             // Output data from writedata port
-            var start_time, end_time = clock_counter
+            var start_time, end_time :UInt = clock_counter
             // waiting for wairrequest
-            when(!avm_if.avm_waitrequest) {
-                avm_if.clk.step()
+            when(!avm_if.io.avm_waitrequest) {
+                avm_if.io.clk.step()
             }
             for(i <- 0 until command_cur.burst_size){
                 start_time = clock_counter
                 if(command_cur.request == REQ_WRITE){
-                    avm_if.avm_writedata := command_cur.writedata(i).U
-                    avm_if.avm_write := true.B
+                    avm_if.io.avm_writedata := command_cur.writedata(i).U
+                    avm_if.io.avm_write := true.B
                 }
-                avm_if.avm_byteenable := command_cur.byte_enable(i).U
-                avm_if.clk.step()
+                avm_if.io.avm_byteenable := command_cur.byte_enable(i).U
+                avm_if.io.clk.step()
 
                 end_time = clock_counter
                 wait_time_stamp = (clock_counter - start_time).intValue()
@@ -530,7 +533,7 @@ class avalon_mm_bfm_master_main[T <: MultiIOModule](dut :T, val avm_if: avalon_m
     }
 
     def avalon_mm_read(): Unit ={
-        when(avm_if.rst.toBool()) {init()}
+        when(avm_if.io.rst.toBool()) {init()}
 
         if (issued_write_command_queue.nonEmpty)
             if (start_construct_complete_write_response == 0) {
@@ -550,7 +553,7 @@ class avalon_mm_bfm_master_main[T <: MultiIOModule](dut :T, val avm_if: avalon_m
         completed_command.command.request match {
             case REQ_WRITE =>
                 // Check if use signal and request signal valid, and if there is input from IO
-                if(!avm_if.avm_writeresponsevalid.litToBoolean) {temp_write_latency += 1; return}
+                if(!avm_if.io.avm_writeresponsevalid.litToBoolean) {temp_write_latency += 1; return}
                 if(USE_WRITERESPONSE == 1 && completed_command.command.write_response_valid){
                     completed_write_response.read_latency    = Array.fill[Int](MAX_BURST_SIZE)(0)
                     completed_write_response.read_response   = Array.fill[Int](MAX_BURST_SIZE)(0)
@@ -602,8 +605,8 @@ class avalon_mm_bfm_master_main[T <: MultiIOModule](dut :T, val avm_if: avalon_m
                     completed_command.wait_time(0)
 
                 if(USE_READ_DATA_VALID == 1||USE_BURSTCOUNT == 1){
-                    if(!avm_if.avm_writeresponsevalid.litToBoolean) {temp_read_latency += 1; return}
-                        completed_read_response.data(read_response_burst_counter) = avm_if.avm_readdata.intValue()
+                    if(!avm_if.io.avm_writeresponsevalid.litToBoolean) {temp_read_latency += 1; return}
+                        completed_read_response.data(read_response_burst_counter) = avm_if.io.avm_readdata.intValue()
                     if (read_response_burst_counter == 0)
                         completed_read_response.read_latency(0) = clock_counter - completed_command.time_stamp
                     else
@@ -612,10 +615,11 @@ class avalon_mm_bfm_master_main[T <: MultiIOModule](dut :T, val avm_if: avalon_m
                     temp_read_latency = 0
                 }
                 else { //Burst
-                    if(AV_FIX_READ_LATENCY > 0 && (clock_counter - completed_command.time_stamp < AV_FIX_READ_LATENCY))
+                    val time_intervals: Int = clock_counter - completed_command.time_stamp
+                    if(AV_FIX_READ_LATENCY > 0 && ( time_intervals < AV_FIX_READ_LATENCY))
                         return
                     completed_read_response.read_latency(0) = AV_FIX_READ_LATENCY
-                    completed_read_response.data(0) = avm_if.avm_readdata.intValue()
+                    completed_read_response.data(0) = avm_if.io.avm_readdata.intValue()
                     temp_read_latency = 0
                 }
 
